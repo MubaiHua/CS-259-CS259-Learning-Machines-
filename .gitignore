@@ -1,0 +1,19 @@
+# Ignore everything initially
+*
+
+# Un-ignore files with an extension (anything with a '.' in the name)
+!*.*
+
+# Un-ignore directories (so Git can traverse into them)
+!*/
+
+# --- IMPORTANT ---
+# You might need to explicitly un-ignore specific files without extensions
+# that you DO want to track (like configuration files, scripts, etc.)
+# Example:
+# !your_script_without_extension
+# !Makefile
+# !.env
+# !.bashrc
+
+.vscode
