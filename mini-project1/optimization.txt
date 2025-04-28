@@ -1,2 +1,5 @@
 OPT1: Change data type from float 32 to float 16, and use Data Layout NHWC instead of NCHW
 OPT2: Tiling using Diannao's idea
+OPT2: Weight Reuse in Diannao paper's idea
+
+CUDNN Benchmark: `nvcc conv2d_cudnn.cu -o conv2d_cudnn -lcudnn`
