@@ -88,6 +88,7 @@ __global__ void classifier_kernel_fp16_shared_memory(
             __syncthreads();
 
             const int current_tile_size = min(TILE_NI, Ni - ni_base);
+            #pragma unroll
             for (int k = 0; k < current_tile_size; ++k) {
                 const int weight_ni = ni_base + k;  // Global ni index for weight element
                 const size_t weight_idx_global = (size_t)nn * Ni + weight_ni;

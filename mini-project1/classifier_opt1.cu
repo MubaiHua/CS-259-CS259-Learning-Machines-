@@ -145,12 +145,10 @@ int main(int argc, char *argv[]) {
     cudaEventCreate(&stop);
     cudaEventRecord(start);
 
-
     classifier_kernel_fp16<<<gridDim, threadsPerBlock>>>(
         d_output, d_input, d_weights, B, Ni, Nn);
 
     cudaEventRecord(stop);
-    
     cudaGetLastError();
     cudaDeviceSynchronize();
     cudaEventSynchronize(stop);

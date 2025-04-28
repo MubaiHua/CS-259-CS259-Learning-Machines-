@@ -209,8 +209,8 @@ __global__ void conv2d_kernel_nhwc_fp16_shared_memory(
                     // Loop over kernel dimensions
                     for (int ky = 0; ky < Ky; ++ky) {
                         for (int kx = 0; kx < Kx; ++kx) {
-// Loop over input channels in the current tile (TILE_Ni)
-#pragma unroll  // Suggest unrolling the innermost loop if TILE_Ni is small and fixed
+                            // Loop over input channels in the current tile (TILE_Ni)
+                            #pragma unroll  // Suggest unrolling the innermost loop if TILE_Ni is small and fixed
                             for (int ni_offset = 0; ni_offset < TILE_Ni; ++ni_offset) {
                                 // Calculate index into the shared input tile
                                 // Coordinates relative to the top-left of the padded shared input tile
