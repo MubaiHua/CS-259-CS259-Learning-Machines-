@@ -121,10 +121,27 @@ int main(int argc, char *argv[]) {
     dim3 threadsPerBlock(256);                                          // 1D block for classifier
     dim3 gridDim((Nn + threadsPerBlock.x - 1) / threadsPerBlock.x, B);  // Grid covers outputs and batch
     printf("Running Classifier GPU Kernel...\n");
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+
     classifier_kernel<<<gridDim, threadsPerBlock>>>(
         d_output, d_input, d_weights, B, Ni, Nn);
+
+    cudaEventRecord(stop);
+
     cudaGetLastError();
-    cudaDeviceSynchronize();  // Wait for kernel to complete
+    cudaDeviceSynchronize();
+    cudaEventSynchronize(stop);
+
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("GPU Kernel finished in %.3f ms.\n", milliseconds);
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
     printf("GPU Kernel finished.\n");
 
     // Copy Result Device -> Host

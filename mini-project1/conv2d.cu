@@ -157,10 +157,27 @@ int main(int argc, char *argv[]) {
                  (Oy + threadsPerBlock.y - 1) / threadsPerBlock.y,
                  B * Nn);
     printf("Running Conv2D GPU Kernel...\n");
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    cudaEventRecord(start);
+
     conv2d_kernel<<<gridDim, threadsPerBlock>>>(
         d_output, d_input, d_weights, B, Nx, Ny, Kx, Ky, Ni, Nn);
+
+    cudaEventRecord(stop);
+
     cudaGetLastError();
-    cudaDeviceSynchronize();  // Wait for kernel to complete
+    cudaDeviceSynchronize();
+    cudaEventSynchronize(stop);
+
+    float milliseconds = 0;
+    cudaEventElapsedTime(&milliseconds, start, stop);
+    printf("GPU Kernel finished in %.3f ms.\n", milliseconds);
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
     printf("GPU Kernel finished.\n");
 
     // Copy Result Device -> Host
