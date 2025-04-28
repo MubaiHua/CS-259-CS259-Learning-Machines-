@@ -1,82 +1,65 @@
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
 #include <time.h>
-#include <cuda_fp16.h>
 
 // --- Verification Function ---
-bool verify(const float *ref, const half *gpu_half, size_t N, float tolerance = 1e-2)
-{
+bool verify(const float *ref, const half *gpu_half, size_t N, float tolerance = 1e-2) {
     float *gpu_float = (float *)malloc(N * sizeof(float));
-    for (size_t i = 0; i < N; ++i)
-    {
-        gpu_float[i] = __half2float(gpu_half[i]); 
+    for (size_t i = 0; i < N; ++i) {
+        gpu_float[i] = __half2float(gpu_half[i]);
     }
 
     size_t errors = 0;
-    for (size_t i = 0; i < N; ++i)
-    {
+    for (size_t i = 0; i < N; ++i) {
         float diff = fabsf(ref[i] - gpu_float[i]);
         bool error_cond = diff > tolerance && diff > fabsf(ref[i] * tolerance);
         if (ref[i] == 0.0f)
             error_cond = diff > tolerance;
 
-        if (error_cond)
-        {
-            if (errors < 10)
-            {
+        if (error_cond) {
+            if (errors < 10) {
                 fprintf(stderr, " Verification failed at index %zu: Ref=%.6f, GPU(FP16)=%.6f, Diff=%.6f\n", i, ref[i], gpu_float[i], diff);
             }
             errors++;
         }
     }
 
-    if (errors == 0)
-    {
+    if (errors == 0) {
         printf("Verification Successful!\n");
         return true;
-    }
-    else
-    {
+    } else {
         printf("Verification FAILED with %zu errors!\n", errors);
         return false;
     }
 }
 
 void conv2d_cpu_nhwc_fp32_ref(float *output, const float *input, const float *weights,
-                              int B, int Nx, int Ny, int Kx, int Ky, int Ni, int Nn)
-{
+                              int B, int Nx, int Ny, int Kx, int Ky, int Ni, int Nn) {
     int Oy = Ny - Ky + 1;
     int Ox = Nx - Kx + 1;
-    for (int b = 0; b < B; ++b)
-    {
-        for (int oy = 0; oy < Oy; ++oy)
-        {
-            for (int ox = 0; ox < Ox; ++ox)
-            {
-                for (int nn = 0; nn < Nn; ++nn)
-                {
+    for (int b = 0; b < B; ++b) {
+        for (int oy = 0; oy < Oy; ++oy) {
+            for (int ox = 0; ox < Ox; ++ox) {
+                for (int nn = 0; nn < Nn; ++nn) {
                     float sum = 0.0f;
-                    for (int ky = 0; ky < Ky; ++ky)
-                    {
-                        for (int kx = 0; kx < Kx; ++kx)
-                        {
-                            for (int ni = 0; ni < Ni; ++ni)
-                            {
+                    for (int ky = 0; ky < Ky; ++ky) {
+                        for (int kx = 0; kx < Kx; ++kx) {
+                            for (int ni = 0; ni < Ni; ++ni) {
                                 int iy = oy + ky;
                                 int ix = ox + kx;
                                 size_t input_idx = (size_t)b * Ny * Nx * Ni + (size_t)iy * Nx * Ni + (size_t)ix * Ni + ni;
                                 size_t weight_idx = (size_t)nn * Ky * Kx * Ni + (size_t)ky * Kx * Ni + (size_t)kx * Ni + ni;
-                                if (iy >= 0 && iy < Ny && ix >= 0 && ix < Nx)
-                                {
+                                if (iy >= 0 && iy < Ny && ix >= 0 && ix < Nx) {
                                     sum += input[input_idx] * weights[weight_idx];
                                 }
                             }
                         }
                     }
                     size_t output_idx = (size_t)b * Oy * Ox * Nn + (size_t)oy * Ox * Nn + (size_t)ox * Nn + nn;
-                    output[output_idx] = sum; // Keep FP32 result for reference
+                    output[output_idx] = sum;  // Keep FP32 result for reference
                 }
             }
         }
@@ -85,8 +68,7 @@ void conv2d_cpu_nhwc_fp32_ref(float *output, const float *input, const float *we
 
 __global__ void conv2d_kernel_nhwc_fp16(
     half *output, const half *input, const half *weights,
-    int B, int Nx, int Ny, int Kx, int Ky, int Ni, int Nn)
-{
+    int B, int Nx, int Ny, int Kx, int Ky, int Ni, int Nn) {
     int Oy = Ny - Ky + 1;
     int Ox = Nx - Kx + 1;
     int ox = blockIdx.x * blockDim.x + threadIdx.x;
@@ -94,19 +76,14 @@ __global__ void conv2d_kernel_nhwc_fp16(
     int nn = blockIdx.z % Nn;
     int b = blockIdx.z / Nn;
 
-    if (ox < Ox && oy < Oy && b < B)
-    {
-        float acc_fp32 = 0.0f; // Accumulate in float
-        for (int ky = 0; ky < Ky; ++ky)
-        {
-            for (int kx = 0; kx < Kx; ++kx)
-            {
-                for (int ni = 0; ni < Ni; ++ni)
-                {
+    if (ox < Ox && oy < Oy && b < B) {
+        float acc_fp32 = 0.0f;  // Accumulate in float
+        for (int ky = 0; ky < Ky; ++ky) {
+            for (int kx = 0; kx < Kx; ++kx) {
+                for (int ni = 0; ni < Ni; ++ni) {
                     int iy = oy + ky;
                     int ix = ox + kx;
-                    if (iy >= 0 && iy < Ny && ix >= 0 && ix < Nx)
-                    {
+                    if (iy >= 0 && iy < Ny && ix >= 0 && ix < Nx) {
                         size_t input_idx = (size_t)b * Ny * Nx * Ni + (size_t)iy * Nx * Ni + (size_t)ix * Ni + ni;
                         size_t weight_idx = (size_t)nn * Ky * Kx * Ni + (size_t)ky * Kx * Ni + (size_t)kx * Ni + ni;
                         acc_fp32 += __half2float(input[input_idx]) * __half2float(weights[weight_idx]);
@@ -115,18 +92,16 @@ __global__ void conv2d_kernel_nhwc_fp16(
             }
         }
         size_t output_idx = (size_t)b * Oy * Ox * Nn + (size_t)oy * Ox * Nn + (size_t)ox * Nn + nn;
-        output[output_idx] = __float2half(acc_fp32); // Convert back to half
+        output[output_idx] = __float2half(acc_fp32);  // Convert back to half
     }
 }
 
 // --- Main Verification Function ---
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     // int Nx = 224, Ny = 224, Kx = 3, Ky = 3, Ni = 64, Nn = 64;
     // int B = 16;
 
-    if (argc != 9)
-    {
+    if (argc != 9) {
         fprintf(stderr, "Error: This program requires <Nx> <Ny> <Kx> <Ky> <Ni> <Nn> <B> <CPU verify> arguments.\n");
         return 1;
     }
@@ -170,22 +145,19 @@ int main(int argc, char *argv[])
     float *h_output_cpu_f = (float *)malloc(output_size * sizeof(float));
     half *h_output_gpu_h = (half *)malloc(output_size * sizeof(half));
 
-    if (!h_input_f || !h_weights_f || !h_input_h || !h_weights_h || !h_output_cpu_f || !h_output_gpu_h)
-    {
+    if (!h_input_f || !h_weights_f || !h_input_h || !h_weights_h || !h_output_cpu_f || !h_output_gpu_h) {
         fprintf(stderr, "Failed to allocate host memory!\n");
         return 1;
     }
 
     // Initialize Host Data (using fixed seed for reproducibility)
     srand(123);
-    for (size_t i = 0; i < input_size; ++i)
-    {
-        h_input_f[i] = (float)(rand() % 20 - 10) / 20.0f; // Smaller range helps FP16
+    for (size_t i = 0; i < input_size; ++i) {
+        h_input_f[i] = (float)(rand() % 20 - 10) / 20.0f;  // Smaller range helps FP16
         h_input_h[i] = __float2half(h_input_f[i]);
     }
-    for (size_t i = 0; i < weight_size; ++i)
-    {
-        h_weights_f[i] = (float)(rand() % 10 - 5) / 20.0f; // Smaller range helps FP16
+    for (size_t i = 0; i < weight_size; ++i) {
+        h_weights_f[i] = (float)(rand() % 10 - 5) / 20.0f;  // Smaller range helps FP16
         h_weights_h[i] = __float2half(h_weights_f[i]);
     }
 
@@ -210,7 +182,7 @@ int main(int argc, char *argv[])
     conv2d_kernel_nhwc_fp16<<<gridDim, threadsPerBlock>>>(
         d_output, d_input, d_weights, B, Nx, Ny, Kx, Ky, Ni, Nn);
     cudaGetLastError();
-    cudaDeviceSynchronize(); // Wait for kernel to complete
+    cudaDeviceSynchronize();  // Wait for kernel to complete
     printf("GPU Kernel finished.\n");
 
     // Copy Result Device -> Host
@@ -218,8 +190,7 @@ int main(int argc, char *argv[])
     cudaMemcpy(h_output_gpu_h, d_output, output_size * sizeof(half), cudaMemcpyDeviceToHost);
     printf("Copying done.\n");
 
-    if (CPU_verify)
-    {
+    if (CPU_verify) {
         // --- CPU Execution ---
         printf("Running Conv2D CPU reference...\n");
         conv2d_cpu_nhwc_fp32_ref(h_output_cpu_f, h_input_f, h_weights_f, B, Nx, Ny, Kx, Ky, Ni, Nn);

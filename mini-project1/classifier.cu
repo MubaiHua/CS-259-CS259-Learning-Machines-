@@ -1,46 +1,35 @@
 #include <cuda_runtime.h>
+#include <math.h>  // For fabs
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h> // For fabs
-#include <time.h> // For srand
+#include <time.h>  // For srand
 
 // --- Verification Function ---
-bool verify(const float *ref, const float *gpu, size_t N, float tolerance = 1e-4)
-{
+bool verify(const float *ref, const float *gpu, size_t N, float tolerance = 1e-4) {
     size_t errors = 0;
-    for (size_t i = 0; i < N; ++i)
-    {
-        if (fabs(ref[i] - gpu[i]) > tolerance)
-        {
-            if (errors < 10)
-            {
+    for (size_t i = 0; i < N; ++i) {
+        if (fabs(ref[i] - gpu[i]) > tolerance) {
+            if (errors < 10) {
                 fprintf(stderr, "Verification failed at index %zu: Ref=%.6f, GPU=%.6f, Diff=%.6f\n", i, ref[i], gpu[i], fabs(ref[i] - gpu[i]));
             }
             errors++;
         }
     }
-    if (errors == 0)
-    {
+    if (errors == 0) {
         printf("Verification Successful!\n");
         return true;
-    }
-    else
-    {
+    } else {
         printf("Verification FAILED with %zu errors!\n", errors);
         return false;
     }
 }
 
 void classifier_cpu(float *output, const float *input, const float *weights,
-                    int B, int Ni, int Nn)
-{
-    for (int b = 0; b < B; ++b)
-    {
-        for (int nn = 0; nn < Nn; ++nn)
-        {
+                    int B, int Ni, int Nn) {
+    for (int b = 0; b < B; ++b) {
+        for (int nn = 0; nn < Nn; ++nn) {
             float sum = 0.0f;
-            for (int ni = 0; ni < Ni; ++ni)
-            {
+            for (int ni = 0; ni < Ni; ++ni) {
                 size_t input_idx = (size_t)b * Ni + ni;
                 size_t weight_idx = (size_t)nn * Ni + ni;
                 sum += input[input_idx] * weights[weight_idx];
@@ -52,16 +41,13 @@ void classifier_cpu(float *output, const float *input, const float *weights,
 }
 
 __global__ void classifier_kernel(float *output, const float *input, const float *weights,
-                                  int B, int Ni, int Nn)
-{
+                                  int B, int Ni, int Nn) {
     int nn = blockIdx.x * blockDim.x + threadIdx.x;
     int b = blockIdx.y;
 
-    if (nn < Nn && b < B)
-    {
+    if (nn < Nn && b < B) {
         float sum = 0.0f;
-        for (int ni = 0; ni < Ni; ++ni)
-        {
+        for (int ni = 0; ni < Ni; ++ni) {
             size_t input_idx = (size_t)b * Ni + ni;
             size_t weight_idx = (size_t)nn * Ni + ni;
             sum += input[input_idx] * weights[weight_idx];
@@ -72,13 +58,11 @@ __global__ void classifier_kernel(float *output, const float *input, const float
 }
 
 // --- Main Verification Function ---
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     // int Ni = 25088, Nn = 4096;
     // int B = 16;
 
-    if (argc != 5)
-    {
+    if (argc != 5) {
         fprintf(stderr, "Error: This program requires <Ni> <Nn> <B> <CPU verify> arguments.\n");
         return 1;
     }
@@ -96,7 +80,7 @@ int main(int argc, char *argv[])
 
     // Calculate sizes
     size_t input_size = (size_t)B * Ni;
-    size_t weight_size = (size_t)Nn * Ni; // Assuming Nn x Ni layout
+    size_t weight_size = (size_t)Nn * Ni;  // Assuming Nn x Ni layout
     size_t output_size = (size_t)B * Nn;
 
     printf("Input: %d x %d, Weights: %d x %d, Output: %d x %d\n",
@@ -108,14 +92,13 @@ int main(int argc, char *argv[])
     float *h_weights = (float *)malloc(weight_size * sizeof(float));
     float *h_output_gpu = (float *)malloc(output_size * sizeof(float));
     float *h_output_cpu = (float *)malloc(output_size * sizeof(float));
-    if (!h_input || !h_weights || !h_output_gpu || !h_output_cpu)
-    {
+    if (!h_input || !h_weights || !h_output_gpu || !h_output_cpu) {
         fprintf(stderr, "Failed to allocate host memory!\n");
         return 1;
     }
 
     // Initialize Host Data (using fixed seed for reproducibility)
-    srand(456); // Different seed than conv2d
+    srand(456);  // Different seed than conv2d
     for (size_t i = 0; i < input_size; ++i)
         h_input[i] = (float)(rand() % 20 - 10) / 10.0f;
     // Use smaller weights for classifier, common practice
@@ -135,13 +118,13 @@ int main(int argc, char *argv[])
     printf("Copying done.\n");
 
     // --- GPU Execution ---
-    dim3 threadsPerBlock(256);                                         // 1D block for classifier
-    dim3 gridDim((Nn + threadsPerBlock.x - 1) / threadsPerBlock.x, B); // Grid covers outputs and batch
+    dim3 threadsPerBlock(256);                                          // 1D block for classifier
+    dim3 gridDim((Nn + threadsPerBlock.x - 1) / threadsPerBlock.x, B);  // Grid covers outputs and batch
     printf("Running Classifier GPU Kernel...\n");
     classifier_kernel<<<gridDim, threadsPerBlock>>>(
         d_output, d_input, d_weights, B, Ni, Nn);
     cudaGetLastError();
-    cudaDeviceSynchronize(); // Wait for kernel to complete
+    cudaDeviceSynchronize();  // Wait for kernel to complete
     printf("GPU Kernel finished.\n");
 
     // Copy Result Device -> Host
@@ -149,8 +132,7 @@ int main(int argc, char *argv[])
     cudaMemcpy(h_output_gpu, d_output, output_size * sizeof(float), cudaMemcpyDeviceToHost);
     printf("Copying done.\n");
 
-    if (CPU_verify)
-    {
+    if (CPU_verify) {
         // --- CPU Execution ---
         printf("Running Classifier CPU reference...\n");
         classifier_cpu(h_output_cpu, h_input, h_weights, B, Ni, Nn);

@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <time.h>
 
+#define TILE_NI 256
+
 bool verify(const float *ref, const half *gpu_half, size_t N, float tolerance = 1e-2) {
     float *gpu_float = (float *)malloc(N * sizeof(float));
     for (size_t i = 0; i < N; ++i) {
@@ -15,7 +17,8 @@ bool verify(const float *ref, const half *gpu_half, size_t N, float tolerance = 
     for (size_t i = 0; i < N; ++i) {
         float diff = fabsf(ref[i] - gpu_float[i]);
         bool error_cond = diff > tolerance && diff > fabsf(ref[i] * tolerance);
-        if (ref[i] == 0.0f) error_cond = diff > tolerance;
+        if (ref[i] == 0.0f)
+            error_cond = diff > tolerance;
 
         if (error_cond) {
             if (errors < 10) {
@@ -49,20 +52,50 @@ void classifier_cpu(float *output, const float *input, const float *weights,
     }
 }
 
-__global__ void classifier_kernel_fp16(
+__global__ void classifier_kernel_fp16_shared_memory(
     half *output, const half *input, const half *weights,
     int B, int Ni, int Nn) {
     int nn = blockIdx.x * blockDim.x + threadIdx.x;
     int b = blockIdx.y;
 
+    __shared__ half input_tile[TILE_NI];
+    // __shared__ half weight_tile[TILE_NI];
+
     if (nn < Nn && b < B) {
         float sum_fp32 = 0.0f;
 
-        for (int ni = 0; ni < Ni; ++ni) {
-            size_t input_idx = (size_t)b * Ni + ni;
-            size_t weight_idx = (size_t)nn * Ni + ni;
+        for (int ni_base = 0; ni_base < Ni; ni_base += TILE_NI) {
+            const int tile_idx = threadIdx.x;           // Thread index maps directly to index within the tile
+            const int current_ni = ni_base + tile_idx;  // Global ni index for this thread's element
 
-            sum_fp32 += __half2float(input[input_idx]) * __half2float(weights[weight_idx]);
+            // Load input element into shared memory (check bounds)
+            if (current_ni < Ni) {
+                const size_t input_idx_global = (size_t)b * Ni + current_ni;
+                input_tile[tile_idx] = input[input_idx_global];
+            } else {
+                input_tile[tile_idx] = __float2half(0.0f);  // Pad with zero if out of bounds
+            }
+
+            // // Load weight element into shared memory (check bounds)
+            // if (current_ni < Ni) {
+            //     // Weight Index: [nn, current_ni]
+            //     const size_t weight_idx_global = (size_t)nn * Ni + current_ni;
+            //     weight_tile[tile_idx] = weights[weight_idx_global];
+            // } else {
+            //     weight_tile[tile_idx] = __float2half(0.0f);  // Pad with zero if out of bounds
+            // }
+
+            __syncthreads();
+
+            const int current_tile_size = min(TILE_NI, Ni - ni_base);
+            for (int k = 0; k < current_tile_size; ++k) {
+                const int weight_ni = ni_base + k;  // Global ni index for weight element
+                const size_t weight_idx_global = (size_t)nn * Ni + weight_ni;
+                // sum_fp32 += __half2float(input_tile[k]) * __half2float(weight_tile[k]);
+                sum_fp32 += __half2float(input_tile[k]) * __half2float(weights[weight_idx_global]);
+            }
+
+            __syncthreads();
         }
 
         size_t output_idx = (size_t)b * Nn + nn;
@@ -136,10 +169,10 @@ int main(int argc, char *argv[]) {
     printf("Copying done.\n");
 
     // --- GPU Execution ---
-    dim3 threadsPerBlock(256);                                          // 1D block for classifier
+    dim3 threadsPerBlock(TILE_NI);                                      // 1D block for classifier
     dim3 gridDim((Nn + threadsPerBlock.x - 1) / threadsPerBlock.x, B);  // Grid covers outputs and batch
     printf("Running Classifier GPU Kernel...\n");
-    classifier_kernel_fp16<<<gridDim, threadsPerBlock>>>(
+    classifier_kernel_fp16_shared_memory<<<gridDim, threadsPerBlock>>>(
         d_output, d_input, d_weights, B, Ni, Nn);
     cudaGetLastError();
     cudaDeviceSynchronize();  // Wait for kernel to complete

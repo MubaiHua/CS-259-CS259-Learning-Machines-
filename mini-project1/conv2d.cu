@@ -1,57 +1,42 @@
 #include <cuda_runtime.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
 #include <time.h>
 
 // --- Verification Function ---
-bool verify(const float *ref, const float *gpu, size_t N, float tolerance = 1e-4)
-{
+bool verify(const float *ref, const float *gpu, size_t N, float tolerance = 1e-4) {
     size_t errors = 0;
-    for (size_t i = 0; i < N; ++i)
-    {
-        if (fabs(ref[i] - gpu[i]) > tolerance)
-        {
-            if (errors < 10)
-            { 
+    for (size_t i = 0; i < N; ++i) {
+        if (fabs(ref[i] - gpu[i]) > tolerance) {
+            if (errors < 10) {
                 fprintf(stderr, "Verification failed at index %zu: Ref=%.6f, GPU=%.6f, Diff=%.6f\n", i, ref[i], gpu[i], fabs(ref[i] - gpu[i]));
             }
             errors++;
         }
     }
-    if (errors == 0)
-    {
+    if (errors == 0) {
         printf("Verification Successful!\n");
         return true;
-    }
-    else
-    {
+    } else {
         printf("Verification FAILED with %zu errors!\n", errors);
         return false;
     }
 }
 
 void conv2d_cpu(float *output, const float *input, const float *weights,
-                int B, int Nx, int Ny, int Kx, int Ky, int Ni, int Nn)
-{
+                int B, int Nx, int Ny, int Kx, int Ky, int Ni, int Nn) {
     int Oy = Ny - Ky + 1;
     int Ox = Nx - Kx + 1;
     // Simpler loops for clarity in basic verification
-    for (int b = 0; b < B; ++b)
-    {
-        for (int nn = 0; nn < Nn; ++nn)
-        {
-            for (int oy = 0; oy < Oy; ++oy)
-            {
-                for (int ox = 0; ox < Ox; ++ox)
-                {
+    for (int b = 0; b < B; ++b) {
+        for (int nn = 0; nn < Nn; ++nn) {
+            for (int oy = 0; oy < Oy; ++oy) {
+                for (int ox = 0; ox < Ox; ++ox) {
                     float sum = 0.0f;
-                    for (int ni = 0; ni < Ni; ++ni)
-                    {
-                        for (int ky = 0; ky < Ky; ++ky)
-                        {
-                            for (int kx = 0; kx < Kx; ++kx)
-                            {
+                    for (int ni = 0; ni < Ni; ++ni) {
+                        for (int ky = 0; ky < Ky; ++ky) {
+                            for (int kx = 0; kx < Kx; ++kx) {
                                 int iy = oy + ky;
                                 int ix = ox + kx;
                                 size_t input_idx = (size_t)b * Ni * Ny * Nx + (size_t)ni * Ny * Nx + (size_t)iy * Nx + ix;
@@ -69,8 +54,7 @@ void conv2d_cpu(float *output, const float *input, const float *weights,
 }
 
 __global__ void conv2d_kernel(float *output, const float *input, const float *weights,
-                              int B, int Nx, int Ny, int Kx, int Ky, int Ni, int Nn)
-{
+                              int B, int Nx, int Ny, int Kx, int Ky, int Ni, int Nn) {
     int Oy = Ny - Ky + 1;
     int Ox = Nx - Kx + 1;
     int ox = blockIdx.x * blockDim.x + threadIdx.x;
@@ -78,15 +62,11 @@ __global__ void conv2d_kernel(float *output, const float *input, const float *we
     int nn = blockIdx.z % Nn;
     int b = blockIdx.z / Nn;
 
-    if (ox < Ox && oy < Oy && b < B)
-    {
+    if (ox < Ox && oy < Oy && b < B) {
         float acc = 0.0f;
-        for (int ni = 0; ni < Ni; ++ni)
-        {
-            for (int ky = 0; ky < Ky; ++ky)
-            {
-                for (int kx = 0; kx < Kx; ++kx)
-                {
+        for (int ni = 0; ni < Ni; ++ni) {
+            for (int ky = 0; ky < Ky; ++ky) {
+                for (int kx = 0; kx < Kx; ++kx) {
                     int iy = oy + ky;
                     int ix = ox + kx;
                     size_t input_idx = (size_t)b * Ni * Ny * Nx + (size_t)ni * Ny * Nx + (size_t)iy * Nx + ix;
@@ -101,13 +81,11 @@ __global__ void conv2d_kernel(float *output, const float *input, const float *we
 }
 
 // --- Main Verification Function ---
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
     // int Nx = 224, Ny = 224, Kx = 3, Ky = 3, Ni = 64, Nn = 64;
     // int B = 16;
 
-    if (argc != 9)
-    {
+    if (argc != 9) {
         fprintf(stderr, "Error: This program requires <Nx> <Ny> <Kx> <Ky> <Ni> <Nn> <B> <CPU verify> arguments.\n");
         return 1;
     }
@@ -149,8 +127,7 @@ int main(int argc, char *argv[])
     float *h_output_gpu = (float *)malloc(output_size * sizeof(float));
     float *h_output_cpu = (float *)malloc(output_size * sizeof(float));
 
-    if (!h_input || !h_weights || !h_output_gpu || !h_output_cpu)
-    {
+    if (!h_input || !h_weights || !h_output_gpu || !h_output_cpu) {
         fprintf(stderr, "Failed to allocate host memory!\n");
         return 1;
     }
@@ -183,7 +160,7 @@ int main(int argc, char *argv[])
     conv2d_kernel<<<gridDim, threadsPerBlock>>>(
         d_output, d_input, d_weights, B, Nx, Ny, Kx, Ky, Ni, Nn);
     cudaGetLastError();
-    cudaDeviceSynchronize(); // Wait for kernel to complete
+    cudaDeviceSynchronize();  // Wait for kernel to complete
     printf("GPU Kernel finished.\n");
 
     // Copy Result Device -> Host
@@ -191,8 +168,7 @@ int main(int argc, char *argv[])
     cudaMemcpy(h_output_gpu, d_output, output_size * sizeof(float), cudaMemcpyDeviceToHost);
     printf("Copying done.\n");
 
-    if (CPU_verify)
-    {
+    if (CPU_verify) {
         // --- CPU Execution ---
         printf("Running Conv2D CPU reference...\n");
         conv2d_cpu(h_output_cpu, h_input, h_weights, B, Nx, Ny, Kx, Ky, Ni, Nn);
