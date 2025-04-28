@@ -1,2 +1,2 @@
 OPT1: Change data type from float 32 to float 16, and use Data Layout NHWC instead of NCHW
-OPT2: Weight Reuse in Diannao paper's idea
+OPT2: Tiling using Diannao's idea

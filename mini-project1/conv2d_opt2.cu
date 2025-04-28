@@ -5,6 +5,12 @@
 #include <time.h>
 #include <cuda_fp16.h>
 
+#define BLOCK_H 16 // Thread block height (output tile height)
+#define BLOCK_W 16 // Thread block width (output tile width)
+#define TILE_Ni 16 // Input channels processed per iteration
+#define TILE_Nn 16 // Output channels computed per block iteration/thread accumulation
+#define K_MAX 3
+
 // --- Verification Function ---
 bool verify(const float *ref, const half *gpu_half, size_t N, float tolerance = 1e-2)
 {
@@ -89,33 +95,194 @@ __global__ void conv2d_kernel_nhwc_fp16(
 {
     int Oy = Ny - Ky + 1;
     int Ox = Nx - Kx + 1;
-    int ox = blockIdx.x * blockDim.x + threadIdx.x;
-    int oy = blockIdx.y * blockDim.y + threadIdx.y;
-    int nn = blockIdx.z % Nn;
-    int b = blockIdx.z / Nn;
 
-    if (ox < Ox && oy < Oy && b < B)
-    {
-        float acc_fp32 = 0.0f; // Accumulate in float
-        for (int ky = 0; ky < Ky; ++ky)
+    // Shared memory allocation
+    // Input tile needs halo: (BLOCK_H + Ky - 1) x (BLOCK_W + Kx - 1) x TILE_Ni
+    // Weight tile: Ky x Kx x TILE_Ni x TILE_Nn
+    // Use template or larger fixed size if Kx/Ky vary significantly
+    const int INPUT_TILE_H_PADDED = BLOCK_H + K_MAX - 1;
+    const int INPUT_TILE_W_PADDED = BLOCK_W + K_MAX - 1;
+    __shared__ half input_tile[INPUT_TILE_H_PADDED * INPUT_TILE_W_PADDED * TILE_Ni];
+    __shared__ half weight_tile[K_MAX * K_MAX * TILE_Ni * TILE_Nn]; // Use K_MAX
+
+    // Thread indices within the block
+    const int tx = threadIdx.x; // 0..BLOCK_W-1
+    const int ty = threadIdx.y; // 0..BLOCK_H-1
+    const int thread_id_in_block = ty * BLOCK_W + tx;
+    const int block_size = BLOCK_H * BLOCK_W; // Total threads per block
+
+    // Block indices mapping - adjusted for channel tiling
+    const int block_ox_base = blockIdx.x * BLOCK_W; // Base output X for this block
+    const int block_oy_base = blockIdx.y * BLOCK_H; // Base output Y for this block
+    // Calculate base output channel and batch index from blockIdx.z
+    const int num_nn_tiles = (Nn + TILE_Nn - 1) / TILE_Nn;
+    const int z_idx = blockIdx.z;
+    const int b = z_idx / num_nn_tiles; // Batch index for this block
+    const int nn_tile_idx = z_idx % num_nn_tiles;
+    const int block_nn_base = nn_tile_idx * TILE_Nn; // Base output channel for this block
+
+    // Target output pixel calculated by this thread
+    const int ox = block_ox_base + tx;
+    const int oy = block_oy_base + ty;
+
+    // Accumulators (one per output channel tile handled by this thread)
+    float accumulators[TILE_Nn];
+    for(int i = 0; i < TILE_Nn; ++i) {
+        accumulators[i] = 0.0f;
+    }
+    
+    // Check if block is valid for the batch dimension early exit
+    if (b >= B) {
+        return;
+    }
+
+    // Calculate start coordinates for loading the input tile's top-left corner (global indices)
+    const int input_tile_y_global_start = block_oy_base; // Assumes Stride=1, Padding=0
+    const int input_tile_x_global_start = block_ox_base; // Assumes Stride=1, Padding=0
+
+    // Loop over input channel tiles (ni_base)
+    for (int ni_base = 0; ni_base < Ni; ni_base += TILE_Ni) {
+
+        // --- Cooperatively Load Input Tile to Shared Memory ---
+        // Each thread loads multiple elements to fill the shared tile
+        for (int load_idx = thread_id_in_block;
+             load_idx < INPUT_TILE_H_PADDED * INPUT_TILE_W_PADDED * TILE_Ni;
+             load_idx += block_size)
         {
-            for (int kx = 0; kx < Kx; ++kx)
-            {
-                for (int ni = 0; ni < Ni; ++ni)
-                {
-                    int iy = oy + ky;
-                    int ix = ox + kx;
-                    if (iy >= 0 && iy < Ny && ix >= 0 && ix < Nx)
-                    {
-                        size_t input_idx = (size_t)b * Ny * Nx * Ni + (size_t)iy * Nx * Ni + (size_t)ix * Ni + ni;
-                        size_t weight_idx = (size_t)nn * Ky * Kx * Ni + (size_t)ky * Kx * Ni + (size_t)kx * Ni + ni;
-                        acc_fp32 += __half2float(input[input_idx]) * __half2float(weights[weight_idx]);
-                    }
-                }
+            // Deconstruct load_idx into (y_offset, x_offset, ni_offset) within the shared tile
+            int ni_offset = load_idx % TILE_Ni;
+            int plane_idx = load_idx / TILE_Ni;
+            int x_offset = plane_idx % INPUT_TILE_W_PADDED;
+            int y_offset = plane_idx / INPUT_TILE_W_PADDED;
+
+            // Calculate global coordinates corresponding to this shared memory element
+            int current_iy = input_tile_y_global_start + y_offset;
+            int current_ix = input_tile_x_global_start + x_offset;
+            int current_ni = ni_base + ni_offset;
+
+            // Calculate destination index in shared memory
+            // Layout: [y_offset, x_offset, ni_offset]
+            int shared_idx = y_offset * INPUT_TILE_W_PADDED * TILE_Ni + x_offset * TILE_Ni + ni_offset;
+
+            // Load from global memory if within bounds, otherwise pad with zero
+            if (current_ni < Ni && current_iy >= 0 && current_iy < Ny && current_ix >= 0 && current_ix < Nx) {
+                 // Global Input Index: [b, current_iy, current_ix, current_ni]
+                 size_t input_idx_global = (size_t)b * Ny * Nx * Ni +
+                                           (size_t)current_iy * Nx * Ni +
+                                           (size_t)current_ix * Ni +
+                                           current_ni;
+                 input_tile[shared_idx] = input[input_idx_global];
+            } else {
+                 input_tile[shared_idx] = __float2half(0.0f); // Zero padding
             }
         }
-        size_t output_idx = (size_t)b * Oy * Ox * Nn + (size_t)oy * Ox * Nn + (size_t)ox * Nn + nn;
-        output[output_idx] = __float2half(acc_fp32); // Convert back to half
+
+        // --- Cooperatively Load Weight Tile to Shared Memory ---
+        // Load weights for the current output channel tile (block_nn_base) and input channel tile (ni_base)
+        const int weight_tile_size = K_MAX * K_MAX * TILE_Ni * TILE_Nn; 
+        for (int load_idx = thread_id_in_block;
+             load_idx < weight_tile_size;
+             load_idx += block_size)
+        {
+             // Deconstruct load_idx to find (nn_offset, ky, kx, ni_offset) within the weight tile
+             // Layout: [nn_offset, ky, kx, ni_offset]
+             int nn_offset = (load_idx / (K_MAX * K_MAX * TILE_Ni)); // Offset within TILE_Nn
+             int kernel_plane_idx = load_idx % (K_MAX * K_MAX * TILE_Ni);
+             int ni_offset = kernel_plane_idx % TILE_Ni; // Offset within TILE_Ni
+             int kernel_idx = kernel_plane_idx / TILE_Ni;
+             int kx = kernel_idx % K_MAX;
+             int ky = kernel_idx / K_MAX;
+
+             // Only load if ky < Ky and kx < Kx (actual runtime dimensions)
+             if (ky < Ky && kx < Kx) {
+                // Calculate global indices using actual ky, kx
+                int current_nn = block_nn_base + nn_offset;
+                int current_ni = ni_base + ni_offset;
+
+                // Calculate destination index in shared memory using K_MAX based layout
+                int shared_idx = nn_offset * K_MAX * K_MAX * TILE_Ni + ky * K_MAX * TILE_Ni + kx * TILE_Ni + ni_offset;
+
+                // Load from global memory if within bounds, otherwise pad
+                if (current_nn < Nn && current_ni < Ni) {
+                    // Global Weight Index: [current_nn, ky, kx, current_ni] (using actual Ky, Kx)
+                    size_t weight_idx_global = (size_t)current_nn * Ky * Kx * Ni +
+                                               (size_t)ky * Kx * Ni +
+                                               (size_t)kx * Ni +
+                                               current_ni;
+                    weight_tile[shared_idx] = weights[weight_idx_global];
+                } else {
+                     weight_tile[shared_idx] = __float2half(0.0f); // Zero padding
+                }
+            }
+         }
+
+        // Synchronize: Ensure all loads into shared memory are complete before computation
+        __syncthreads();
+
+        // --- Perform Convolution using Shared Memory Data ---
+        // Check if the output pixel calculated by this thread is valid
+        if (ox < Ox && oy < Oy) {
+            // Loop over the output channels this block computes (TILE_Nn)
+            for (int nn_offset = 0; nn_offset < TILE_Nn; ++nn_offset) {
+                 int current_nn = block_nn_base + nn_offset;
+                 // Check if this specific output channel is needed (handles Nn not multiple of TILE_Nn)
+                 if (current_nn < Nn) {
+                     // Loop over kernel dimensions
+                     for (int ky = 0; ky < Ky; ++ky) {
+                         for (int kx = 0; kx < Kx; ++kx) {
+                             // Loop over input channels in the current tile (TILE_Ni)
+                             #pragma unroll // Suggest unrolling the innermost loop if TILE_Ni is small and fixed
+                             for (int ni_offset = 0; ni_offset < TILE_Ni; ++ni_offset) {
+
+                                 // Calculate index into the shared input tile
+                                 // Coordinates relative to the top-left of the padded shared input tile
+                                 int shared_input_y = ty + ky; // ty is thread's y offset within output tile
+                                 int shared_input_x = tx + kx; // tx is thread's x offset within output tile
+                                 // Shared Input Index: [shared_input_y, shared_input_x, ni_offset]
+                                 int input_shared_idx = shared_input_y * INPUT_TILE_W_PADDED * TILE_Ni +
+                                                        shared_input_x * TILE_Ni +
+                                                        ni_offset;
+
+                                 // Calculate index into the shared weight tile
+                                 // Shared Weight Index: [nn_offset, ky, kx, ni_offset]
+                                 int weight_shared_idx = nn_offset * Ky * Kx * TILE_Ni +
+                                                         ky * Kx * TILE_Ni +
+                                                         kx * TILE_Ni +
+                                                         ni_offset;
+
+                                 // Accumulate product (reading from shared memory)
+                                 accumulators[nn_offset] += __half2float(input_tile[input_shared_idx]) *
+                                                            __half2float(weight_tile[weight_shared_idx]);
+                             } // ni_offset
+                         } // kx
+                     } // ky
+                 } // if current_nn < Nn
+            } // nn_offset
+        } // if output pixel is valid
+
+        // Synchronize: Ensure all computations using the current tiles are done
+        // before potentially loading the next tiles in the ni_base loop
+        __syncthreads();
+
+    } // End loop over ni_base
+
+        // --- Write results to Global Memory ---
+    // Check if the output pixel is valid before writing
+    if (ox < Ox && oy < Oy) {
+        // Loop over the output channels computed by this thread
+        for (int nn_offset = 0; nn_offset < TILE_Nn; ++nn_offset) {
+            int current_nn = block_nn_base + nn_offset;
+            // Check if this specific output channel is needed
+            if (current_nn < Nn) {
+                // Global Output Index: [b, oy, ox, current_nn]
+                size_t output_idx_global = (size_t)b * Oy * Ox * Nn +
+                                           (size_t)oy * Ox * Nn +
+                                           (size_t)ox * Nn +
+                                           current_nn;
+                // Convert final accumulated float back to half for storing
+                output[output_idx_global] = __float2half(accumulators[nn_offset]);
+            }
+        }
     }
 }
 
@@ -202,10 +369,15 @@ int main(int argc, char *argv[])
     printf("Copying done.\n");
 
     // --- GPU Execution ---
-    dim3 threadsPerBlock(16, 16);
-    dim3 gridDim((Ox + threadsPerBlock.x - 1) / threadsPerBlock.x,
-                 (Oy + threadsPerBlock.y - 1) / threadsPerBlock.y,
-                 B * Nn);
+    dim3 threadsPerBlock(BLOCK_W, BLOCK_H);
+
+    int gridX = (Ox + BLOCK_W - 1) / BLOCK_W;
+    int gridY = (Oy + BLOCK_H - 1) / BLOCK_H;
+    int num_nn_tiles = (Nn + TILE_Nn - 1) / TILE_Nn;
+    int gridZ = B * num_nn_tiles; // Total blocks needed in Z dimension
+
+    dim3 gridDim(gridX, gridY, gridZ);
+
     printf("Running Conv2D GPU Kernel...\n");
     conv2d_kernel_nhwc_fp16<<<gridDim, threadsPerBlock>>>(
         d_output, d_input, d_weights, B, Nx, Ny, Kx, Ky, Ni, Nn);
