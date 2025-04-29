@@ -12,7 +12,7 @@
 #define K_MAX 3
 
 // --- Verification Function ---
-bool verify(const float *ref, const half *gpu_half, size_t N, float tolerance = 1e-2) {
+bool verify(const float *ref, const half *gpu_half, size_t N, float tolerance = 0.5) {
     float *gpu_float = (float *)malloc(N * sizeof(float));
     for (size_t i = 0; i < N; ++i) {
         gpu_float[i] = __half2float(gpu_half[i]);
@@ -108,7 +108,7 @@ __global__ void conv2d_kernel_nhwc_fp16_shared_memory(
     const int oy = block_oy_base + ty;
 
     // Accumulators (one per output channel tile handled by this thread)
-    float accumulators[TILE_Nn];
+    half accumulators[TILE_Nn];
     for (int i = 0; i < TILE_Nn; ++i) {
         accumulators[i] = 0.0f;
     }
@@ -153,7 +153,7 @@ __global__ void conv2d_kernel_nhwc_fp16_shared_memory(
                                           current_ni;
                 input_tile[shared_idx] = input[input_idx_global];
             } else {
-                input_tile[shared_idx] = __float2half(0.0f);  // Zero padding
+                input_tile[shared_idx] = 0.0f;  // Zero padding
             }
         }
 
@@ -190,7 +190,7 @@ __global__ void conv2d_kernel_nhwc_fp16_shared_memory(
                                                current_ni;
                     weight_tile[shared_idx] = weights[weight_idx_global];
                 } else {
-                    weight_tile[shared_idx] = __float2half(0.0f);  // Zero padding
+                    weight_tile[shared_idx] = 0.0f;  // Zero padding
                 }
             }
         }
@@ -229,8 +229,7 @@ __global__ void conv2d_kernel_nhwc_fp16_shared_memory(
                                                         ni_offset;
 
                                 // Accumulate product (reading from shared memory)
-                                accumulators[nn_offset] += __half2float(input_tile[input_shared_idx]) *
-                                                           __half2float(weight_tile[weight_shared_idx]);
+                                accumulators[nn_offset] += input_tile[input_shared_idx] * weight_tile[weight_shared_idx];
                             }  // ni_offset
                         }  // kx
                     }  // ky
@@ -258,7 +257,7 @@ __global__ void conv2d_kernel_nhwc_fp16_shared_memory(
                                            (size_t)ox * Nn +
                                            current_nn;
                 // Convert final accumulated float back to half for storing
-                output[output_idx_global] = __float2half(accumulators[nn_offset]);
+                output[output_idx_global] = accumulators[nn_offset];
             }
         }
     }

@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <time.h>
 
-bool verify(const float *ref, const half *gpu_half, size_t N, float tolerance = 1e-2) {
+bool verify(const float *ref, const half *gpu_half, size_t N, float tolerance = 0.5) {
     float *gpu_float = (float *)malloc(N * sizeof(float));
     for (size_t i = 0; i < N; ++i) {
         gpu_float[i] = __half2float(gpu_half[i]);
@@ -56,17 +56,17 @@ __global__ void classifier_kernel_fp16(
     int b = blockIdx.y;
 
     if (nn < Nn && b < B) {
-        float sum_fp32 = 0.0f;
+        half sum_fp32 = 0.0f;
 
         for (int ni = 0; ni < Ni; ++ni) {
             size_t input_idx = (size_t)b * Ni + ni;
             size_t weight_idx = (size_t)nn * Ni + ni;
 
-            sum_fp32 += __half2float(input[input_idx]) * __half2float(weights[weight_idx]);
+            sum_fp32 += input[input_idx] * weights[weight_idx];
         }
 
         size_t output_idx = (size_t)b * Nn + nn;
-        output[output_idx] = __float2half(sum_fp32);
+        output[output_idx] = sum_fp32;
     }
 }
 

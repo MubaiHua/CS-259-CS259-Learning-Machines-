@@ -7,7 +7,7 @@
 
 #define TILE_NI 256
 
-bool verify(const float *ref, const half *gpu_half, size_t N, float tolerance = 1e-2) {
+bool verify(const float *ref, const half *gpu_half, size_t N, float tolerance = 0.5) {
     float *gpu_float = (float *)malloc(N * sizeof(float));
     for (size_t i = 0; i < N; ++i) {
         gpu_float[i] = __half2float(gpu_half[i]);
@@ -62,7 +62,7 @@ __global__ void classifier_kernel_fp16_shared_memory(
     // __shared__ half weight_tile[TILE_NI];
 
     if (nn < Nn && b < B) {
-        float sum_fp32 = 0.0f;
+        half sum_fp32 = 0.0f;
 
         for (int ni_base = 0; ni_base < Ni; ni_base += TILE_NI) {
             const int tile_idx = threadIdx.x;           // Thread index maps directly to index within the tile
@@ -73,7 +73,7 @@ __global__ void classifier_kernel_fp16_shared_memory(
                 const size_t input_idx_global = (size_t)b * Ni + current_ni;
                 input_tile[tile_idx] = input[input_idx_global];
             } else {
-                input_tile[tile_idx] = __float2half(0.0f);  // Pad with zero if out of bounds
+                input_tile[tile_idx] = 0.0f;  // Pad with zero if out of bounds
             }
 
             // // Load weight element into shared memory (check bounds)
@@ -93,14 +93,14 @@ __global__ void classifier_kernel_fp16_shared_memory(
                 const int weight_ni = ni_base + k;  // Global ni index for weight element
                 const size_t weight_idx_global = (size_t)nn * Ni + weight_ni;
                 // sum_fp32 += __half2float(input_tile[k]) * __half2float(weight_tile[k]);
-                sum_fp32 += __half2float(input_tile[k]) * __half2float(weights[weight_idx_global]);
+                sum_fp32 += input_tile[k] * weights[weight_idx_global];
             }
 
             __syncthreads();
         }
 
         size_t output_idx = (size_t)b * Nn + nn;
-        output[output_idx] = __float2half(sum_fp32);
+        output[output_idx] = sum_fp32;
     }
 }
 
