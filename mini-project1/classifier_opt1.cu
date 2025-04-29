@@ -151,7 +151,7 @@ int main(int argc, char *argv[]) {
     cudaEventRecord(stop);
     cudaGetLastError();
     cudaDeviceSynchronize();
-    cudaEventSynchronize(stop);
+    // cudaEventSynchronize(stop);
 
     float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
