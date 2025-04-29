@@ -56,17 +56,17 @@ __global__ void classifier_kernel_fp16(
     int b = blockIdx.y;
 
     if (nn < Nn && b < B) {
-        half sum_fp32 = 0.0f;
+        half sum_fp16 = 0.0f;
 
         for (int ni = 0; ni < Ni; ++ni) {
             size_t input_idx = (size_t)b * Ni + ni;
             size_t weight_idx = (size_t)nn * Ni + ni;
 
-            sum_fp32 += input[input_idx] * weights[weight_idx];
+            sum_fp16 += input[input_idx] * weights[weight_idx];
         }
 
         size_t output_idx = (size_t)b * Nn + nn;
-        output[output_idx] = sum_fp32;
+        output[output_idx] = sum_fp16;
     }
 }
 

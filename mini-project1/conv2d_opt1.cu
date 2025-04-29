@@ -77,7 +77,7 @@ __global__ void conv2d_kernel_nhwc_fp16(
     int b = blockIdx.z / Nn;
 
     if (ox < Ox && oy < Oy && b < B) {
-        half acc_fp32 = 0.0f;  // Accumulate in float
+        half acc_fp16 = 0.0f;  // Accumulate in float
         for (int ky = 0; ky < Ky; ++ky) {
             for (int kx = 0; kx < Kx; ++kx) {
                 for (int ni = 0; ni < Ni; ++ni) {
@@ -86,13 +86,13 @@ __global__ void conv2d_kernel_nhwc_fp16(
                     if (iy >= 0 && iy < Ny && ix >= 0 && ix < Nx) {
                         size_t input_idx = (size_t)b * Ny * Nx * Ni + (size_t)iy * Nx * Ni + (size_t)ix * Ni + ni;
                         size_t weight_idx = (size_t)nn * Ky * Kx * Ni + (size_t)ky * Kx * Ni + (size_t)kx * Ni + ni;
-                        acc_fp32 += input[input_idx] * weights[weight_idx];
+                        acc_fp16 += input[input_idx] * weights[weight_idx];
                     }
                 }
             }
         }
         size_t output_idx = (size_t)b * Oy * Ox * Nn + (size_t)oy * Ox * Nn + (size_t)ox * Nn + nn;
-        output[output_idx] = acc_fp32;  // Convert back to half
+        output[output_idx] = acc_fp16;  // Convert back to half
     }
 }
 
