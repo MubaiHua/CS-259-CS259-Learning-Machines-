@@ -30,7 +30,7 @@ __global__ void conv2d_tiled(float *__restrict__ output,
 
     /* batch index and first filter handled by this thread-block */
     const int b      = blockIdx.z / NUM_FBLK;
-    const int blk_nn = (blockIdx.z % NUM_FBLK) * TILE_NN;   //   **was wrong**
+    const int blk_nn = (blockIdx.z % NUM_FBLK) * TILE_NN;
 
     /* x / y inside the feature map – unchanged */
     const int blk_ox = blockIdx.x * TILE_OX;
@@ -39,11 +39,13 @@ __global__ void conv2d_tiled(float *__restrict__ output,
     const int tx = threadIdx.x;
     const int ty = threadIdx.y;
 
-    /* -------- shared memory for one input tile --------
-       Size: (TILE_OY+Ky-1)*(TILE_OX+Kx-1)
-       Each float loaded once, reused by all filters in this TB
-    ---------------------------------------------------- */
+
+    const int IN_TILE_SIZE  = (TILE_OY + Ky - 1) * (TILE_OX + Kx - 1);
+    const int W_TILE_SIZE   = TILE_NN * TILE_NI * Ky * Kx;
     extern __shared__ float smem[];        // dynamically sized
+    float* smem_in  = smem;                    // first page: input patch
+    float* smem_w   = smem + IN_TILE_SIZE;     // second page: weights
+
     const int SM_W = TILE_OX + Kx - 1;     // stride in shared memory
 
     /* -------- guard: block may be partially outside image -------- */
@@ -69,10 +71,36 @@ __global__ void conv2d_tiled(float *__restrict__ output,
                         size_t in_idx = ((size_t)b   * Ni * Ny * Nx) +
                                         ((size_t)gin * Ny * Nx)      +
                                         ((size_t)iy  * Nx) + ix;
-                        smem[y * SM_W + x] = input[in_idx];
+                        smem_in[y * SM_W + x] = input[in_idx];
                     }
                 }
             __syncthreads();
+
+            /* ----- load TILE_NN × TILE_NI × Kx × Ky weights into smem_w ----- */
+            int tid   = ty * blockDim.x + tx;                  // 0‥(TB-1)
+            int stride = blockDim.x * blockDim.y;
+
+            for (int idx = tid; idx < W_TILE_SIZE; idx += stride)
+            {
+                int tmp = idx;
+                int kx  =  tmp % Kx;  tmp /= Kx;
+                int ky  =  tmp % Ky;  tmp /= Ky;
+                int ni  =  tmp % TILE_NI; tmp /= TILE_NI;
+                int dn  =  tmp;                   // 0‥TILE_NN-1
+
+                int g_ni = ni0 +  ni;             // global input-channel
+                int g_nn = blk_nn + dn;           // global output-channel
+
+                if (g_ni < Ni && g_nn < Nn) {
+                    size_t w_idx = ((size_t)g_nn * Ni * Ky * Kx) +
+                                ((size_t)g_ni * Ky * Kx)      +
+                                ky * Kx + kx;
+                    smem_w[idx] = weights[w_idx];
+                } else {
+                    smem_w[idx] = 0.0f;           // pad for edges & last tiles
+                }
+            }
+            __syncthreads();                       // weights ready
 
             /* 2. do the 3×3 (or Kx×Ky) MAC for this channel */
             int ox = blk_ox + tx;
@@ -83,15 +111,16 @@ __global__ void conv2d_tiled(float *__restrict__ output,
                 #pragma unroll
                 for (int kx = 0; kx < Kx; ++kx)
                 {
-                    float v = smem[(ty + ky) * SM_W + (tx + kx)];
+                    float v = smem_in[(ty + ky) * SM_W + (tx + kx)];
 
-                    size_t w_base = (size_t)(gin * Ky * Kx) + ky * Kx + kx;
+                    // size_t w_base = (size_t)(gin * Ky * Kx) + ky * Kx + kx;
                     /* add contribution from each of the TILE_NN filters */
                     #pragma unroll
                     for (int dn = 0; dn < TILE_NN; ++dn) {
                         int nn = blk_nn + dn;
                         if (nn < Nn) {
-                            float w = __ldg(weights + (size_t)nn * Ni * Ky * Kx + w_base);
+                            int w_off = (((dn * TILE_NI + ni) * Ky) + ky) * Kx + kx;
+                            float w = smem_w[w_off];
                             accum[dn] += v * w;
                         }
                     }

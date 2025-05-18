@@ -4,10 +4,16 @@ import pandas as pd
 def estimate_conv_kernel_bottleneck(
     B=1, Ni=64, Nx=32, Ny=32, Nn=128, Kx=3, Ky=3,
     dtype_size=4,                      # FP32 = 4 bytes
-    peak_flops=13.8e12,               # Titan V FP32 peak
-    bw_L1=1000e9, bw_L2=900e9, bw_DRAM=652.8e9,
-    reuse_input_L1=None, reuse_weight_L1=None, reuse_output_L1=1,
-    reuse_input_L2=2, reuse_weight_L2=10, reuse_output_L2=1
+    peak_flops=14.9e12,               # Titan V FP32 peak
+    bw_L1=1000e9,
+    bw_L2=900e9,
+    bw_DRAM=652.8e9,
+    reuse_input_L1=None,
+    reuse_weight_L1=None,
+    reuse_output_L1=1,
+    reuse_input_L2=2,
+    reuse_weight_L2=10,
+    reuse_output_L2=1
 ):
     # Output dimensions
     Ox = Nx - Kx + 1
@@ -62,7 +68,14 @@ def estimate_conv_kernel_bottleneck(
 
 
 df, T = estimate_conv_kernel_bottleneck(
-    B=16, Ni=64, Nx=224, Ny=224, Nn=64, Kx=3, Ky=3
+    B=16, Ni=64, Nx=224, Ny=224, Nn=64, Kx=3, Ky=3,
+    reuse_input_L1=9,
+    reuse_weight_L1=128,  # 3x3 kernel; 16x8 tile size
+    reuse_output_L1=1,
+    reuse_input_L2=2,
+    reuse_weight_L2=10,
+    reuse_output_L2=1
 )
+
 print(df)
 print(f"Total estimated time: {T * 1e6:.2f} µs")

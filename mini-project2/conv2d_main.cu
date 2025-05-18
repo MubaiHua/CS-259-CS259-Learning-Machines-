@@ -83,13 +83,14 @@ int main(int argc, char *argv[]) {
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    cudaEventRecord(start);
+    cudaEventRecord(start, 0);
 
     const dim3 block(16, 8);         // 128 threads
-    const int TILE_OX = 16, TILE_OY = 8, TILE_NN = 4, TILE_NI = 8;
-
-    size_t smem_bytes = (TILE_OX + Kx - 1) * (TILE_OY + Ky - 1) * sizeof(float);
-
+    const int TILE_OX = 16, TILE_OY = 16, TILE_NN = 4, TILE_NI = 4;
+    const int IN_TILE_SIZE  = (TILE_OY + Ky - 1) * (TILE_OX + Kx - 1);
+    const int W_TILE_SIZE   = TILE_NN * TILE_NI * Ky * Kx;
+    size_t smem_bytes =
+      (IN_TILE_SIZE + W_TILE_SIZE) * sizeof(float);
     dim3 grid(
         (Ox + TILE_OX - 1)/TILE_OX,
         (Oy + TILE_OY - 1)/TILE_OY,
@@ -99,10 +100,9 @@ int main(int argc, char *argv[]) {
     conv2d_tiled<TILE_OY, TILE_OX, TILE_NN, TILE_NI, Kx, Ky>
         <<<grid, block, smem_bytes>>>(d_output, d_input, d_weights, B, Nx, Ny, Ni, Nn);
 
-    cudaEventRecord(stop);
-    cudaGetLastError();
-    cudaDeviceSynchronize();
-    // cudaEventSynchronize(stop);
+
+    cudaEventRecord(stop, 0);
+    cudaEventSynchronize(stop);  // wait for kernel to finish
 
     float milliseconds = 0;
     cudaEventElapsedTime(&milliseconds, start, stop);
