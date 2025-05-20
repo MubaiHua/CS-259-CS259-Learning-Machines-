@@ -10,10 +10,10 @@ KY = 3
 
 DTYPE_SIZE = 4
 
-PEAK_FLOPS = 14.9e12
-BW_L1 = 1000e9
-BW_L2 = 900e9
-BW_DRAM = 652.8e9
+# PEAK_FLOPS = 14.9e12
+# BW_L1 = 1000e9
+# BW_L2 = 900e9
+# BW_DRAM = 652.8e9
 
 REUSE_INPUT_L1 = 9
 REUSE_WEIGHT_L1 = 128
@@ -22,16 +22,18 @@ REUSE_INPUT_L2 = 2
 REUSE_WEIGHT_L2 = 10
 REUSE_OUTPUT_L2 = 1
 
+TILE_SIZE = 8
+
 # nx_values = [32, 64, 128, 224]
 # ny_values = [32, 64, 128, 224]
 # ni_values = [16, 32, 64]
 # nn_values = [16, 32, 64]
-ni_nn_pairs = [(16, 16), (32, 32), (64, 64)]
-nx_ny_pairs = [(32, 32), (64, 64), (128, 128), (224, 224)]
-b_values = [1, 8, 16]
+ni_nn_pairs = [(128, 128), (256, 256)]
+nx_ny_pairs = [(128, 128), (256, 256)]
+b_values = [8, 16]
 
+from new_model import estimate_conv_tiled_performance_refined
 from conv2d_perf_model import estimate_conv_kernel_bottleneck
-
 
 def run_experiment(nx, ny, ni, nn, b):
     """
@@ -120,6 +122,22 @@ def main():
                     nx_val, ny_val, ni_val, nn_val, b_val
                 )
 
+                # _, model_predicted_time_s = estimate_conv_tiled_performance_refined(
+                #     B=b_val,
+                #     Ni=ni_val,
+                #     Nx=nx_val,
+                #     Ny=ny_val,
+                #     Nn=nn_val,
+                #     Kx=KX,
+                #     Ky=KY,
+                #     TILE_OY_K=TILE_SIZE, 
+                #     TILE_OX_K=TILE_SIZE, 
+                #     TILE_NN_K=TILE_SIZE, 
+                #     TILE_NI_K=TILE_SIZE,
+                #     BLOCK_DIM_X=TILE_SIZE, 
+                #     BLOCK_DIM_Y=TILE_SIZE
+                # )
+
                 _, model_predicted_time_s = estimate_conv_kernel_bottleneck(
                     B=b_val,
                     Ni=ni_val,
@@ -128,18 +146,8 @@ def main():
                     Nn=nn_val,
                     Kx=KX,
                     Ky=KY,
-                    dtype_size=DTYPE_SIZE,
-                    peak_flops=PEAK_FLOPS,
-                    bw_L1=BW_L1,
-                    bw_L2=BW_L2,
-                    bw_DRAM=BW_DRAM,
-                    reuse_input_L1=REUSE_INPUT_L1,
-                    reuse_weight_L1=REUSE_WEIGHT_L1,
-                    reuse_output_L1=REUSE_OUTPUT_L1,
-                    reuse_input_L2=REUSE_INPUT_L2,
-                    reuse_weight_L2=REUSE_WEIGHT_L2,
-                    reuse_output_L2=REUSE_OUTPUT_L2,
                 )
+                
                 model_predicted_time_ms = model_predicted_time_s * 1000  # Convert to ms
                 print(f"  Model predicted time: {model_predicted_time_ms:.3f} ms")
 

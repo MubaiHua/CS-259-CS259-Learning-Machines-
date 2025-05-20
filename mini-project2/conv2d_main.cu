@@ -10,6 +10,8 @@
 #include "conv2d_tiled.cuh"
 #include "conv2d_cpu.cuh"
 
+#define TILE_SIZE 8
+
 // --- Main Verification Function ---
 int main(int argc, char *argv[]) {
     // int Nx = 224, Ny = 224, Ni = 64, Nn = 64;
@@ -85,8 +87,8 @@ int main(int argc, char *argv[]) {
     cudaEventCreate(&stop);
     cudaEventRecord(start, 0);
 
-    const dim3 block(16, 8);         // 128 threads
-    const int TILE_OX = 16, TILE_OY = 8, TILE_NN = 8, TILE_NI = 8;
+    const dim3 block(TILE_SIZE, TILE_SIZE);         // 128 threads
+    const int TILE_OX = TILE_SIZE, TILE_OY = TILE_SIZE, TILE_NN = TILE_SIZE, TILE_NI = TILE_SIZE;
     const int IN_TILE_SIZE  = (TILE_OY + Ky - 1) * (TILE_OX + Kx - 1);
     const int W_TILE_SIZE   = TILE_NN * TILE_NI * Ky * Kx;
     size_t smem_bytes =

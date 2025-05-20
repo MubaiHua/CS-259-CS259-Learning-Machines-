@@ -4,10 +4,10 @@ import pandas as pd
 def estimate_conv_kernel_bottleneck(
     B=1, Ni=64, Nx=32, Ny=32, Nn=128, Kx=3, Ky=3,
     dtype_size=4,                      # FP32 = 4 bytes
-    peak_flops=14.9e12,               # Titan V FP32 peak
+    peak_flops=30.87e12,               # Titan V FP32 peak
     bw_L1=1000e9,
     bw_L2=900e9,
-    bw_DRAM=652.8e9,
+    bw_DRAM=672e9,
     reuse_input_L1=None,
     reuse_weight_L1=None,
     reuse_output_L1=1,
@@ -51,20 +51,20 @@ def estimate_conv_kernel_bottleneck(
 
     # Time estimates
     T_compute = total_flops / peak_flops
-    T_L1 = traffic_L1 / bw_L1
-    T_L2 = traffic_L2 / bw_L2
+    # T_L1 = traffic_L1 / bw_L1
+    # T_L2 = traffic_L2 / bw_L2
     T_DRAM = traffic_DRAM / bw_DRAM
-    T_mem = max(T_L1, T_L2, T_DRAM)
-    T_total = max(T_compute, T_mem)
+    # T_mem = max(T_L1, T_L2, T_DRAM)
+    T_total = max(T_compute, T_DRAM)
 
     # Summary table
-    df = pd.DataFrame({
-        "Component": ["Compute", "L1 Memory", "L2 Cache", "DRAM"],
-        "Time (s)": [T_compute, T_L1, T_L2, T_DRAM],
-        "Traffic (GB)": [np.nan, traffic_L1 / 1e9, traffic_L2 / 1e9, traffic_DRAM / 1e9],
-    })
+    # df = pd.DataFrame({
+    #     "Component": ["Compute", "L1 Memory", "L2 Cache", "DRAM"],
+    #     "Time (s)": [T_compute, T_L1, T_L2, T_DRAM],
+    #     "Traffic (GB)": [np.nan, traffic_L1 / 1e9, traffic_L2 / 1e9, traffic_DRAM / 1e9],
+    # })
 
-    return df, T_total
+    return None, T_total
 
 
 df, T = estimate_conv_kernel_bottleneck(
