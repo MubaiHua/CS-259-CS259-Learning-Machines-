@@ -86,7 +86,7 @@ int main(int argc, char *argv[]) {
     cudaEventRecord(start, 0);
 
     const dim3 block(16, 8);         // 128 threads
-    const int TILE_OX = 16, TILE_OY = 16, TILE_NN = 4, TILE_NI = 4;
+    const int TILE_OX = 16, TILE_OY = 8, TILE_NN = 8, TILE_NI = 8;
     const int IN_TILE_SIZE  = (TILE_OY + Ky - 1) * (TILE_OX + Kx - 1);
     const int W_TILE_SIZE   = TILE_NN * TILE_NI * Ky * Kx;
     size_t smem_bytes =
